@@ -1239,6 +1239,16 @@ body.menu-open .scrim{opacity:1;visibility:visible}
   #print .sub{display:flex;justify-content:space-between;font-size:11pt;color:#444;padding:4px 0}
   #print .sub.dsc{color:#0A6E3E}
   #print tr{page-break-inside:avoid}
+  /* catálogo: vitrine de três colunas, a foto manda e o preço fecha o cartão */
+  #print .kcat{font-size:12pt;font-weight:700;margin:18px 0 8px;padding-bottom:4px;border-bottom:1px solid #999;break-after:avoid;page-break-after:avoid}
+  #print .kgrid{display:flex;flex-wrap:wrap;gap:6mm 5mm}
+  #print .kitem{width:calc((100% - 10mm)/3);break-inside:avoid;page-break-inside:avoid}
+  #print .kimg{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:2.5mm;display:block;background:#F1F1F1}
+  #print .knoimg{width:100%;aspect-ratio:1/1;border-radius:2.5mm;background:#F1F1F1;display:flex;align-items:center;justify-content:center;color:#AAA;font-size:9pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #print .knm{font-weight:700;font-size:10.5pt;margin-top:6px;line-height:1.3}
+  #print .kds{font-size:8.5pt;color:#555;line-height:1.4;margin-top:2px}
+  #print .kpr{font-size:12pt;font-weight:700;margin-top:4px}
+  #print .kpr.q{font-size:9.5pt;font-weight:400;color:#777}
 }
 
 /* ---------- orcamento com varios itens ---------- */
@@ -2507,6 +2517,16 @@ textarea{min-height:104px;font-family:var(--code);font-size:13px;line-height:1.5
       <div id="p-msg"></div>
       <div class="pgrid" id="product-grid"></div>
       <div id="product-empty"></div>
+
+      <div id="p-export" hidden>
+        <h2 class="section" style="margin-top:22px">Exportar catálogo</h2>
+        <p class="note" style="margin:0 0 4px">Todos os produtos, separados por categoria, com foto, descrição para o cliente e preço de venda.</p>
+        <div class="btnrow">
+          <button type="button" class="btn" id="btn-cat-pdf">Gerar PDF</button>
+          <button type="button" class="btn" id="btn-cat-docx">Baixar Word (.docx)</button>
+        </div>
+        <div id="cat-exp-msg" style="margin-top:10px"></div>
+      </div>
 
       <p class="gohint">As categorias que aparecem aqui em cima são criadas em <button type="button" class="golink" data-go="cadastros" data-cad="cats">Cadastros › Categorias</button>.</p>
     </section>
@@ -4298,6 +4318,8 @@ var PALACT = [
   {t:'Novo link público',      s:'Negócio › Link público',  ic:'share', go:'share',     click:'btn-add-link',     kw:'vitrine compartilhar catalogo cliente whatsapp divulgar loja'},
   {t:'Salvar este orçamento',  s:'Calculadora',             ic:'saved', go:'calc',      click:'btn-save',         kw:'guardar pedido proposta'},
   {t:'Gerar PDF do orçamento', s:'Calculadora',             ic:'pdf',   go:'calc',      click:'btn-pdf',          kw:'imprimir proposta papel'},
+  {t:'Catálogo em PDF',        s:'Negócio › Produtos',      ic:'pdf',   go:'products',  click:'btn-cat-pdf',      kw:'exportar catalogo imprimir fotos precos tabela lista vitrine'},
+  {t:'Catálogo em Word',       s:'Negócio › Produtos',      ic:'pdf',   go:'products',  click:'btn-cat-docx',     kw:'exportar catalogo docx word documento fotos precos tabela lista'},
   {t:'Limpar o cálculo',       s:'Calculadora',             ic:'broom', go:'calc',      click:'btn-clear',        kw:'zerar apagar recomecar'},
   {t:'Exportar meus dados',    s:'Ajustes › Meus dados',    ic:'down',  go:'data',      click:'btn-export',       kw:'backup copia seguranca arquivo'},
   {t:'Importar dados',         s:'Ajustes › Meus dados',    ic:'up',    go:'data',      click:'btn-import',       kw:'restaurar backup arquivo'},
@@ -7966,6 +7988,7 @@ function renderProducts(){
     b.addEventListener('click', function(){ openProduct(b.getAttribute('data-p')); });
   });
   hydratePhotos(grid);
+  $('p-export').hidden = !S.products.length;
 }
 function newProduct(){
   return {id:uid(), name:'', category:'', note:'', stlUrl:'', photos:[], pubDesc:'', videos:[],
@@ -10431,6 +10454,384 @@ function buildClientPrint(c){
   return printReady();
 }
 
+/* ============ catálogo inteiro em PDF e em Word ============
+   O que o cliente vê de cada produto: foto, nome, descrição para o cliente
+   (pubDesc, a mesma do link público — a anotação interna NÃO sai daqui) e o
+   preço de venda. Custo, lucro e tempo de máquina ficam no app.
+
+   O PDF passa pelo mesmo #print do orçamento e do extrato. O Word é um .docx
+   de verdade, montado aqui mesmo: o pacote é um ZIP de XMLs com as fotos
+   dentro, e um ZIP sem compressão cabe em poucas linhas — sem biblioteca, sem
+   internet, e abre no Word, no Google Docs e no LibreOffice. */
+var CATX_BUSY = false;
+
+function catxGroups(){
+  var by = {}, order = [], loose = [];
+  S.products.slice().sort(byProductName).forEach(function(p){
+    var c = catById(p.category);
+    if(!c){ loose.push(p); return; }
+    if(!by[c.id]){ by[c.id] = {name:c.name || 'Categoria', color:safeColor(c.color, '#8A95A2'), items:[]}; order.push(by[c.id]); }
+    by[c.id].items.push(p);
+  });
+  order.sort(function(a,b){ return a.name.localeCompare(b.name, 'pt-BR', {sensitivity:'base'}); });
+  /* sem nenhuma categoria em uso, um título "Outros" sozinho só atrapalha */
+  if(loose.length) order.push({name:order.length ? 'Outros produtos' : '', color:'', items:loose});
+  return order;
+}
+function catxDesc(p){ return String(p.pubDesc || '').replace(/\s+/g, ' ').trim(); }
+function catxPrice(p){ var v = productPrice(p); return v > 0 ? brl(v) : ''; }
+function catxSlug(){
+  var b = String(S.settings.biz || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  var d = new Date();
+  return 'catalogo' + (b ? '-' + b : '') + '-' + d.getFullYear() + '-' +
+    ('0' + (d.getMonth()+1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function catxMsg(html){ var m = $('cat-exp-msg'); if(m) m.innerHTML = html || ''; }
+
+/* a primeira foto de cada produto, já com o endereço pronto para <img>. Foto
+   que não chega (sem internet, apagada) vira cartão sem foto, não erro. */
+function catxPhotos(list){
+  var srcs = {}, done = 0, total = list.length;
+  catxMsg('<p class="note"><span class="spin"></span> Juntando as fotos… 0 de ' + total + '</p>');
+  return Promise.all(list.map(function(p){
+    var id = (p.photos || [])[0];
+    return (id ? photoGet(id) : Promise.resolve(null)).then(function(ph){
+      /* miniatura nova tem 640 px: num cartão de 5,5 cm são ~300 dpi. A antiga,
+         de 320 px, sairia serrilhada — aí vale a foto grande */
+      if(ph) srcs[p.id] = ((ph.v || 1) >= 2 && ph.thumb) ? ph.thumb : (ph.full || ph.thumb || '');
+    }, function(){}).then(function(){
+      done++;
+      catxMsg('<p class="note"><span class="spin"></span> Juntando as fotos… ' + done + ' de ' + total + '</p>');
+    });
+  })).then(function(){ return srcs; });
+}
+
+/* ---- PDF ---- */
+function buildCatalogPrint(){
+  var st = S.settings, groups = catxGroups();
+  var dd = new Date().toLocaleDateString('pt-BR');
+  return catxPhotos(S.products).then(function(srcs){
+    var body = groups.map(function(g){
+      return (g.name ? '<div class="kcat">' +
+          (g.color ? '<span style="display:inline-block;width:8pt;height:8pt;border-radius:50%;margin-right:6pt;vertical-align:0;background:' + esc(g.color) + ';-webkit-print-color-adjust:exact;print-color-adjust:exact"></span>' : '') +
+          esc(g.name) + '</div>' : '') +
+        '<div class="kgrid">' + g.items.map(function(p){
+          var src = srcs[p.id], ds = catxDesc(p), pr = catxPrice(p);
+          if(ds.length > 230) ds = ds.slice(0, 227).replace(/\s+\S*$/, '') + '…';
+          return '<div class="kitem">' +
+            (src ? '<img class="kimg" src="' + esc(src) + '" alt="">' : '<div class="knoimg">sem foto</div>') +
+            '<div class="knm">' + esc(p.name || 'Produto') + '</div>' +
+            (ds ? '<div class="kds">' + esc(ds) + '</div>' : '') +
+            '<div class="kpr' + (pr ? '' : ' q') + '">' + (pr ? esc(pr) : 'Preço sob consulta') + '</div>' +
+          '</div>';
+        }).join('') + '</div>';
+    }).join('');
+    var n = S.products.length;
+    $('print').innerHTML =
+      '<div class="phead"><div class="pid">' +
+        '<h1>' + esc(st.biz || 'Catálogo') + '</h1>' +
+        '<div class="pmeta">' + esc(st.contact || '') + '</div>' +
+      '</div><img class="plogo" src="lyke-logo.png" alt=""></div>' +
+      '<div class="ptitle">Catálogo · ' + dd + '</div>' +
+      body +
+      '<div class="note">' + n + (n === 1 ? ' produto' : ' produtos') + ' · preços de ' + dd + '.<br>' +
+        'Valores sujeitos a alteração.' + (st.contact ? ' Pedidos: ' + esc(st.contact) + '.' : '') + '</div>';
+    catxMsg('<p class="note"><span class="spin"></span> Preparando as páginas…</p>');
+    return printReady();
+  });
+}
+function exportCatalogPdf(){
+  if(CATX_BUSY) return;
+  if(!S.products.length){ alert('O catálogo ainda está vazio.'); return; }
+  CATX_BUSY = true;
+  buildCatalogPrint().then(function(){
+    catxMsg('');
+    /* o nome do arquivo que o navegador sugere ao salvar em PDF é o título da página */
+    var t0 = document.title;
+    document.title = catxSlug();
+    var back = function(){ document.title = t0; window.removeEventListener('afterprint', back); };
+    window.addEventListener('afterprint', back);
+    setTimeout(back, 60000);
+    window.print();
+  }, function(){
+    catxMsg('<div class="alert bad">Não foi possível montar o PDF. Tente de novo.</div>');
+  }).then(function(){ CATX_BUSY = false; });
+}
+
+/* ---- Word (.docx) ---- */
+var CRCT = null;
+function crc32(u8){
+  if(!CRCT){
+    CRCT = new Uint32Array(256);
+    for(var n = 0; n < 256; n++){
+      var c = n;
+      for(var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      CRCT[n] = c >>> 0;
+    }
+  }
+  var x = 0xFFFFFFFF;
+  for(var i = 0; i < u8.length; i++) x = CRCT[(x ^ u8[i]) & 0xFF] ^ (x >>> 8);
+  return (x ^ 0xFFFFFFFF) >>> 0;
+}
+/* ZIP "store": cada arquivo vai inteiro, sem compressão. As fotos já são JPEG
+   (não encolheriam) e o XML é pequeno; o Word aceita sem reclamar. */
+function zipStore(files, type){
+  var enc = new TextEncoder(), parts = [], central = [], off = 0, csize = 0;
+  files.forEach(function(f){
+    var nm = enc.encode(f.name), d = typeof f.data === 'string' ? enc.encode(f.data) : f.data, crc = crc32(d);
+    var h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint16(12, 33, true); /* 01/01/1980: data DOS válida */
+    h.setUint32(14, crc, true); h.setUint32(18, d.length, true); h.setUint32(22, d.length, true);
+    h.setUint16(26, nm.length, true);
+    parts.push(new Uint8Array(h.buffer), nm, d);
+    var c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint16(14, 33, true);
+    c.setUint32(16, crc, true); c.setUint32(20, d.length, true); c.setUint32(24, d.length, true);
+    c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+    central.push(new Uint8Array(c.buffer), nm);
+    csize += 46 + nm.length;
+    off += 30 + nm.length + d.length;
+  });
+  var e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true);
+  e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, csize, true); e.setUint32(16, off, true);
+  return new Blob(parts.concat(central, [new Uint8Array(e.buffer)]), {type:type});
+}
+function catxBytes(blob){
+  if(blob.arrayBuffer) return blob.arrayBuffer().then(function(b){ return new Uint8Array(b); });
+  return new Promise(function(res, rej){
+    var r = new FileReader();
+    r.onload = function(){ res(new Uint8Array(r.result)); };
+    r.onerror = rej;
+    r.readAsArrayBuffer(blob);
+  });
+}
+/* a foto vira um JPEG quadrado (recorte central, como no cartão do app): o
+   Word nem sempre lê WebP, e quadrados deixam a grade alinhada */
+function catxJpeg(src, dim){
+  return new Promise(function(res){
+    var im = new Image();
+    im.onload = function(){
+      try {
+        var w = im.naturalWidth, h = im.naturalHeight, s = Math.min(w, h);
+        if(!s) return res(null);
+        var cv = document.createElement('canvas'); cv.width = cv.height = dim;
+        var g = cv.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, dim, dim);
+        g.drawImage(im, (w - s)/2, (h - s)/2, s, s, 0, 0, dim, dim);
+        cv.toBlob(function(b){ b ? catxBytes(b).then(res, function(){ res(null); }) : res(null); }, 'image/jpeg', 0.86);
+      } catch(e){ res(null); }
+    };
+    im.onerror = function(){ res(null); };
+    im.src = src;
+  });
+}
+/* o logo mantém a transparência e a proporção. Aberto por file:// o canvas fica
+   "sujo" e não exporta: o documento sai sem logo, o que é melhor que não sair */
+function catxLogo(){
+  return new Promise(function(res){
+    var im = new Image();
+    im.onload = function(){
+      try {
+        var w = im.naturalWidth, h = im.naturalHeight;
+        if(!w || !h) return res(null);
+        var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(im, 0, 0);
+        cv.toBlob(function(b){
+          b ? catxBytes(b).then(function(u8){ res({data:u8, w:w, h:h}); }, function(){ res(null); }) : res(null);
+        }, 'image/png');
+      } catch(e){ res(null); }
+    };
+    im.onerror = function(){ res(null); };
+    im.src = 'lyke-logo.png';
+  });
+}
+
+function xesc(s){
+  return String(s == null ? '' : s)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+/* um parágrafo do Word; quebras de linha do texto viram <w:br/> */
+function wPara(text, o){
+  o = o || {};
+  var rpr = '<w:rPr>' + (o.b ? '<w:b/>' : '') + (o.color ? '<w:color w:val="' + o.color + '"/>' : '') +
+    '<w:sz w:val="' + (o.sz || 20) + '"/></w:rPr>';
+  var runs = String(text == null ? '' : text).split(/\r?\n/).map(function(t, i){
+    return '<w:r>' + rpr + (i ? '<w:br/>' : '') + '<w:t xml:space="preserve">' + xesc(t) + '</w:t></w:r>';
+  }).join('');
+  return '<w:p><w:pPr>' + (o.keep ? '<w:keepNext/>' : '') +
+    (o.border ? '<w:pBdr><w:bottom w:val="single" w:sz="' + o.border + '" w:space="3" w:color="' + (o.bcolor || '000000') + '"/></w:pBdr>' : '') +
+    '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after || 0) + '"/>' +
+    (o.align ? '<w:jc w:val="' + o.align + '"/>' : '') +
+    '</w:pPr>' + runs + '</w:p>';
+}
+function wImage(rid, n, cx, cy, align){
+  return '<w:p><w:pPr><w:spacing w:before="0" w:after="80"/>' + (align ? '<w:jc w:val="' + align + '"/>' : '') + '</w:pPr><w:r><w:drawing>' +
+    '<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + cx + '" cy="' + cy + '"/>' +
+    '<wp:docPr id="' + n + '" name="Imagem ' + n + '"/>' +
+    '<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>' +
+    '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+    '<pic:pic><pic:nvPicPr><pic:cNvPr id="' + n + '" name="Imagem ' + n + '"/><pic:cNvPicPr/></pic:nvPicPr>' +
+    '<pic:blipFill><a:blip r:embed="' + rid + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+    '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
+    '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>';
+}
+var W_NONE = '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>';
+function wTable(cols, rows){
+  var tw = cols.reduce(function(a, b){ return a + b; }, 0);
+  return '<w:tbl><w:tblPr><w:tblW w:w="' + tw + '" w:type="dxa"/><w:tblLayout w:type="fixed"/>' + W_NONE +
+    '<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>' +
+    '<w:tblGrid>' + cols.map(function(w){ return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>' +
+    rows.map(function(r){
+      return '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + r.map(function(cell, i){
+        return '<w:tc><w:tcPr><w:tcW w:w="' + cols[i] + '" w:type="dxa"/></w:tcPr>' + (cell || '<w:p/>') + '</w:tc>';
+      }).join('') + '</w:tr>';
+    }).join('') + '</w:tbl>';
+}
+
+/* A4 com 18 mm de margem, como o PDF: 9866 twips úteis, três colunas */
+var DOCX_PAGE = 11906, DOCX_MARGIN = 1020, DOCX_COL = 3288;
+var DOCX_IMG = 1950000; /* ~5,4 cm em EMU: a coluna menos o respiro das bordas */
+
+function buildCatalogDocx(){
+  var st = S.settings, groups = catxGroups(), list = S.products.slice();
+  var dd = new Date().toLocaleDateString('pt-BR');
+  var media = [], rels = [], pics = {}, nid = 1;
+
+  return catxPhotos(list).then(function(srcs){
+    var ids = list.map(function(p){ return p.id; }).filter(function(id){ return srcs[id]; });
+    var done = 0;
+    /* uma de cada vez: com o catálogo inteiro, vários canvas de 900 px abertos
+       ao mesmo tempo derrubam o navegador do celular */
+    return ids.reduce(function(chain, id){
+      return chain.then(function(){
+        return catxJpeg(srcs[id], 900).then(function(u8){
+          done++;
+          catxMsg('<p class="note"><span class="spin"></span> Preparando as fotos… ' + done + ' de ' + ids.length + '</p>');
+          if(!u8) return;
+          var k = media.length + 1;
+          media.push({name:'word/media/foto' + k + '.jpeg', data:u8});
+          rels.push('<Relationship Id="rIdF' + k + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/foto' + k + '.jpeg"/>');
+          pics[id] = 'rIdF' + k;
+        });
+      });
+    }, Promise.resolve());
+  }).then(catxLogo).then(function(logo){
+    var body = '';
+
+    /* cabeçalho: negócio e contato à esquerda, marca à direita */
+    var left = wPara(st.biz || 'Catálogo', {b:true, sz:36}) + (st.contact ? wPara(st.contact, {sz:19, color:'555555', before:20}) : '');
+    var right = '<w:p/>';
+    if(logo){
+      media.push({name:'word/media/logo.png', data:logo.data});
+      rels.push('<Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo.png"/>');
+      var lw = 1152000; /* 32 mm, igual ao PDF */
+      right = wImage('rIdLogo', nid++, lw, Math.round(lw * logo.h / logo.w), 'right');
+    }
+    body += wTable([6566, 3300], [[left, right]]);
+    body += wPara('CATÁLOGO · ' + dd, {sz:20, color:'666666', border:12, before:280, after:240});
+
+    groups.forEach(function(g){
+      if(g.name) body += wPara(g.name, {b:true, sz:24, keep:true, border:4, bcolor:'999999', before:200, after:160});
+      var rows = [];
+      for(var i = 0; i < g.items.length; i += 3){
+        rows.push(g.items.slice(i, i + 3).map(function(p){
+          var pr = catxPrice(p), ds = catxDesc(p), rid = pics[p.id];
+          return (rid ? wImage(rid, nid++, DOCX_IMG, DOCX_IMG) : '') +
+            wPara(p.name || 'Produto', {b:true, sz:21, after:30}) +
+            (ds ? wPara(ds, {sz:17, color:'555555', after:40}) : '') +
+            wPara(pr || 'Preço sob consulta', pr ? {b:true, sz:24, after:280} : {sz:18, color:'777777', after:280});
+        }));
+        while(rows[rows.length - 1].length < 3) rows[rows.length - 1].push('');
+      }
+      body += wTable([DOCX_COL, DOCX_COL, DOCX_COL], rows);
+      /* duas tabelas encostadas o Word funde numa só */
+      body += '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>';
+    });
+
+    var n = list.length;
+    body += wPara(n + (n === 1 ? ' produto' : ' produtos') + ' · preços de ' + dd + '.\nValores sujeitos a alteração.' +
+      (st.contact ? ' Pedidos: ' + st.contact + '.' : ''), {sz:18, color:'555555', before:240});
+
+    var doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"' +
+      ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"' +
+      ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"' +
+      ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"' +
+      ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+      '<w:body>' + body +
+      '<w:sectPr><w:pgSz w:w="' + DOCX_PAGE + '" w:h="16838"/>' +
+      '<w:pgMar w:top="' + DOCX_MARGIN + '" w:right="' + DOCX_MARGIN + '" w:bottom="' + DOCX_MARGIN + '" w:left="' + DOCX_MARGIN + '" w:header="567" w:footer="567" w:gutter="0"/>' +
+      '</w:sectPr></w:body></w:document>';
+
+    var styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>' +
+      '<w:sz w:val="20"/><w:szCs w:val="20"/><w:lang w:val="pt-BR"/></w:rPr></w:rPrDefault>' +
+      '<w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+      '</w:styles>';
+
+    var title = (st.biz ? st.biz + ' · ' : '') + 'Catálogo ' + dd;
+    var core = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"' +
+      ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"' +
+      ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+      '<dc:title>' + xesc(title) + '</dc:title>' +
+      '<dcterms:created xsi:type="dcterms:W3CDTF">' + new Date().toISOString().replace(/\.\d+Z$/, 'Z') + '</dcterms:created>' +
+      '</cp:coreProperties>';
+
+    var files = [
+      {name:'[Content_Types].xml', data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Default Extension="jpeg" ContentType="image/jpeg"/>' +
+        '<Default Extension="png" ContentType="image/png"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+        '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>' +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
+        '</Types>'},
+      {name:'_rels/.rels', data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>' +
+        '</Relationships>'},
+      {name:'docProps/core.xml', data:core},
+      {name:'word/document.xml', data:doc},
+      {name:'word/styles.xml', data:styles},
+      {name:'word/_rels/document.xml.rels', data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+        rels.join('') + '</Relationships>'}
+    ].concat(media);
+
+    return zipStore(files, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  });
+}
+function exportCatalogDocx(){
+  if(CATX_BUSY) return;
+  if(!S.products.length){ alert('O catálogo ainda está vazio.'); return; }
+  CATX_BUSY = true;
+  buildCatalogDocx().then(function(blob){
+    downloadBlob(blob, blob.type, catxSlug() + '.docx');
+    var mb = blob.size / 1048576;
+    catxMsg('<div class="alert">Catálogo em Word baixado' + (mb >= 0.1 ? ' (' + dec(mb, 1) + ' MB)' : '') + '.</div>');
+  }, function(){
+    catxMsg('<div class="alert bad">Não foi possível montar o arquivo do Word. Tente de novo.</div>');
+  }).then(function(){ CATX_BUSY = false; });
+}
+
+function bindCatalogExport(){
+  $('btn-cat-pdf').addEventListener('click', exportCatalogPdf);
+  $('btn-cat-docx').addEventListener('click', exportCatalogDocx);
+}
+
 /* ============ eventos ============ */
 function bindCalc(){
   ['f-grams','f-h','f-m','f-qty','f-perplate','f-parts','f-waste','f-fail','f-prep','f-finish'].forEach(function(id){
@@ -10790,6 +11191,7 @@ function bindImport(){
 }
 
 function bindProducts(){
+  bindCatalogExport();
   $('p-search').addEventListener('input', function(){ prodQuery = this.value.trim().toLowerCase(); renderProducts(); });
   each(qsa($('seg-psort'),'button'), function(b){
     b.addEventListener('click', function(){
