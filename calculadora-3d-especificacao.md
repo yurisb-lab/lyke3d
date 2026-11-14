@@ -1541,3 +1541,28 @@ Campos novos `line` e `store` nascem vazios. Cadastros antigos continuam com a
 cor que tinham e com a marca/loja no campo **Marca** — dá para mudar para
 *Qualquer cor* e mover a loja para o campo novo quando quiser. Produtos,
 orçamentos e pedidos não mudam: guardam o id do cadastro, como sempre.
+
+## 61. Catálogo inteiro em PDF e em Word
+
+No fim da tela **Produtos**, o bloco **Exportar catálogo** (e as ações
+*Catálogo em PDF* / *Catálogo em Word* na busca rápida) gera o catálogo
+completo para mandar ou imprimir:
+
+- **Todos os produtos**, independentemente do filtro ou da busca da tela,
+  separados por categoria em ordem alfabética; os sem categoria vão por último
+  em *Outros produtos* (sem título nenhum quando ninguém tem categoria).
+- Cada produto sai com a **primeira foto** (recorte quadrado), o **nome**, a
+  **descrição para o cliente** (`pubDesc`, a mesma do link público) e o
+  **preço de venda** (`productPrice`). Sem preço: *Preço sob consulta*. Sem
+  foto: um quadro vazio no PDF. A **anotação interna, custo, lucro e tempo não
+  saem**.
+- Cabeçalho igual ao do orçamento: nome do negócio, contato e a marca.
+- **PDF**: monta no `#print` e abre a impressão do navegador, em três colunas
+  A4; o nome sugerido do arquivo é `catalogo-<negócio>-<data>`.
+- **Word**: baixa um `.docx` de verdade, montado no próprio navegador (ZIP sem
+  compressão, sem biblioteca nem internet). As fotos viram JPEG quadrado de
+  900 px — o Word nem sempre lê WebP. Abre no Word, Google Docs e LibreOffice.
+- Fotos que não chegam (sem rede, apagadas) não interrompem: o produto sai sem
+  foto.
+
+Nada muda nos dados gravados.
